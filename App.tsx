@@ -33,6 +33,7 @@ export default function App() {
         mode: FlashMode.off,
         jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
     });
+    const [containPreview, setContainPreview] = useState<boolean>(true);
 
     useEffect(() => {
         Camera.requestPermissionsAsync()
@@ -193,10 +194,17 @@ export default function App() {
         })
     }
 
+    const togglePreview = () => {
+        if (isRecording) return;
+        setContainPreview(c => !c);
+    }
+
     return (
         <SafeAreaView style={styles.container}>
             <SafeAreaView style={styles.container}>
-                <ViewShot ref={(ref) => setCameraViewShot(ref)} options={{ format: "jpg", quality: 0.9 }} style={styles.camera}>
+                <ViewShot ref={(ref) => setCameraViewShot(ref)}
+                    options={{ format: "jpg", quality: 0.9 }}
+                    style={containPreview ? { ...styles.camera, ...styles.cameraContain } : { ...styles.camera, ...styles.cameraCover }}>
                     <Camera
                         style={{ width: '100%', height: '100%' }}
                         type={camType}
@@ -216,7 +224,11 @@ export default function App() {
                         underlayColor={'#f0f7ff'}>
                         <Text style={styles.barcodeLink}>{barcodeLink}</Text>
                     </TouchableHighlight>
-                    <View></View>
+                    <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
+                        <TouchableHighlight style={{ ...styles.switchButton, opacity: isRecording ? 0 : 1 }} onPress={togglePreview}>
+                            <MaterialIcons name="preview" size={Dimensions.get('window').width * .06} color="black" style={styles.icon} />
+                        </TouchableHighlight>
+                    </View>
                     <View style={{ flex: 1, flexDirection: 'row', alignContent: 'center', justifyContent: 'space-between' }}>
 
                     </View>
@@ -275,15 +287,22 @@ export default function App() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: '#000',
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: 'flex-start',
     },
     camera: {
         position: 'absolute',
+        alignItems: 'center'
+    },
+    cameraCover: {
         width: Dimensions.get('window').height * .75,
         height: Dimensions.get('window').height,
-        alignItems: 'center'
+    },
+    cameraContain: {
+        width: Dimensions.get('window').width,
+        height: Dimensions.get('window').width * 1.333,
+        marginTop: Dimensions.get('window').height * .12
     },
     cameraUI: {
         position: 'absolute',
@@ -291,7 +310,8 @@ const styles = StyleSheet.create({
         height: '100%',
         justifyContent: 'space-between',
         alignContent: 'center',
-        padding: Dimensions.get('window').width * .03
+        paddingHorizontal: Dimensions.get('window').width * .03,
+        paddingVertical: Dimensions.get('window').width * .01
     },
     barcodeLinkContainer: {
         position: 'absolute',
@@ -349,5 +369,11 @@ const styles = StyleSheet.create({
         borderRadius: 100,
         borderWidth: 2,
         borderColor: '#d0d0d0'
+    },
+    switchButton: {
+        backgroundColor: '#d0d0d0',
+        borderRadius: 100,
+        borderWidth: 2,
+        borderColor: 'white'
     }
 });
