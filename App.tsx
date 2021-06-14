@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, Button, TouchableHighlight, Dimensions, Image } from 'react-native';
+import { StyleSheet, Text, View, TouchableHighlight, Dimensions, Image, Platform } from 'react-native';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +11,8 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 import ViewShot from 'react-native-view-shot';
 import { CameraType, FlashMode } from 'expo-camera/build/Camera.types';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as Linking from 'expo-linking';
+import * as Brightness from 'expo-brightness';
 
 let barcodeLinkTimeout: any = null;
 
@@ -80,33 +82,56 @@ export default function App() {
             .then(({ uri }) => uri);
     }
 
-    const handleTakePhoto = () => {
-        if (isRecording || flashMode.mode === FlashMode.torch) {
-            if (cameraViewShot) {
-                let cap = cameraViewShot.capture;
-                if (cap) {
-                    cap().then(uri => {
-                        if (camType === CameraType.front) {
-                            return flipImage(uri);
-                        }
-                        else return uri;
+    const capturePreview = () => {
+        if (cameraViewShot) {
+            let cap = cameraViewShot.capture;
+            if (cap) {
+                cap().then(uri => {
+                    if (camType === CameraType.front) {
+                        return flipImage(uri);
+                    }
+                    else return uri;
+                })
+                    .then(uri => {
+                        return MediaLibrary.createAssetAsync(uri);
                     })
-                        .then(uri => {
-                            return MediaLibrary.createAssetAsync(uri);
-                        })
-                        .then(({ uri }) => {
-                            setLastImage(uri);
-                        })
-                }
+                    .then(({ uri }) => {
+                        setLastImage(uri);
+                    })
             }
+        }
+    }
+
+    const handleTakePhoto = () => {
+        if (isRecording) {
+            capturePreview();
+            return;
+        }
+
+        if (flashMode.mode === FlashMode.torch && camType === CameraType.back) capturePreview();
+        if (camType === CameraType.front && flashMode.mode === FlashMode.on) {
+            setFlashMode(FlashTypes.torch);
+
+            camera?.takePictureAsync()
+                .then((data) => {
+                    setFlashMode(FlashTypes.on);
+                    return MediaLibrary.createAssetAsync(data.uri);
+                })
+                .then((data) => {
+                    console.log(data.uri);
+                    setLastImage(data.uri);
+                })
+                .catch(e => {
+                    console.warn(e);
+                })
         }
         else {
             camera?.takePictureAsync()
                 .then((data) => {
-                    console.log(data.uri);
                     return MediaLibrary.createAssetAsync(data.uri);
                 })
                 .then((data) => {
+                    console.log(data.uri);
                     setLastImage(data.uri);
                 })
                 .catch(e => {
@@ -149,10 +174,16 @@ export default function App() {
     }
 
     const handleFlip = () => {
-        setCamType(currentType => {
-            if (currentType === 'back') return 'front';
-            else return 'back';
-        })
+        if (camType === CameraType.back) {
+            setCamType(CameraType.front);
+            setFlashMode(FlashTypes.off);
+        }
+        else {
+            setCamType(CameraType.back);
+            if (flashMode.mode === FlashMode.torch) {
+                setFlashMode(FlashTypes.on);
+            }
+        }
 
         if (isRecording) setIsRecording(false);
     }
@@ -167,30 +198,27 @@ export default function App() {
     }
 
     const handleFlashToggle = () => {
-        setFlashMode(f => {
-            if (f.mode === FlashMode.off) return {
-                mode: FlashMode.auto,
-                jsx: <MaterialIcons name="flash-auto" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
-            }
-            if (f.mode === FlashMode.auto) return {
-                mode: FlashMode.on,
-                jsx: <MaterialIcons name="flash-on" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
-            }
-            if (f.mode === FlashMode.on) return {
-                mode: FlashMode.off,
-                jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
-            }
-            return {
-                mode: FlashMode.off,
-                jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
-            }
-        })
+        if (camType === CameraType.back) {
+            setFlashMode(f => {
+                if (f.mode === FlashMode.off) return FlashTypes.auto;
+                if (f.mode === FlashMode.auto) return FlashTypes.on;
+                if (f.mode === FlashMode.on) return FlashTypes.off
+                return FlashTypes.off;
+            })
+        }
+        else if (flashMode.mode === FlashMode.off) {
+
+            setFlashMode(FlashTypes.on);
+        }
+        else {
+            setFlashMode(FlashTypes.off);
+        }
     }
 
     const handleTorchToggle = () => {
         setFlashMode(f => {
-            if (f.mode === FlashMode.torch) return { ...f, mode: FlashMode.on }
-            else return { ...f, mode: FlashMode.torch }
+            if (f.mode === FlashMode.torch) return FlashTypes.on;
+            else return FlashTypes.torch;
         })
     }
 
@@ -199,11 +227,28 @@ export default function App() {
         setContainPreview(c => !c);
     }
 
+    const openPhotos = () => {
+        switch (Platform.OS) {
+            case "ios":
+                Linking.openURL("photos-redirect://");
+                break;
+            case "android":
+                Linking.openURL("content://media/internal/images/media");
+                break;
+            default:
+                console.warn("Could not open gallery app");
+        }
+    }
+
+    const frontFlashOn = (): boolean => {
+        return flashMode.mode === FlashMode.torch && camType === CameraType.front
+    }
+
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={{ ...styles.container, backgroundColor: frontFlashOn() ? 'white' : 'black' }}>
             <SafeAreaView style={styles.container}>
                 <ViewShot ref={(ref) => setCameraViewShot(ref)}
-                    options={{ format: "jpg", quality: 0.9 }}
+                    options={{ format: "jpg", quality: 1 }}
                     style={containPreview ? { ...styles.camera, ...styles.cameraContain } : { ...styles.camera, ...styles.cameraCover }}>
                     <Camera
                         style={{ width: '100%', height: '100%' }}
@@ -213,6 +258,12 @@ export default function App() {
                         onCameraReady={() => onCameraReady()}
                         barCodeScannerSettings={{ barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr] }}
                         onBarCodeScanned={({ data }) => handleBarcodeScanned(data)}>
+                        <View
+                            style={{
+                                width: '100%', height: '100%', backgroundColor: frontFlashOn()
+                                    ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0)'
+                            }}>
+                        </View>
                     </Camera>
                 </ViewShot>
             </SafeAreaView>
@@ -263,7 +314,8 @@ export default function App() {
                     </View>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                         <View style={{ width: '30%', alignItems: 'center' }}>
-                            <TouchableHighlight style={{ width: Dimensions.get('window').width * .15, height: Dimensions.get('window').width * .15 }}>
+                            <TouchableHighlight style={{ width: Dimensions.get('window').width * .15, height: Dimensions.get('window').width * .15 }}
+                                onPress={openPhotos}>
                                 {lastImage ? <Image source={{ uri: lastImage }} style={styles.mediaPreview} /> : <View style={styles.mediaPreview}></View>}
                             </TouchableHighlight>
                         </View>
@@ -377,3 +429,22 @@ const styles = StyleSheet.create({
         borderColor: 'white'
     }
 });
+
+const FlashTypes = {
+    auto: {
+        mode: FlashMode.auto,
+        jsx: <MaterialIcons name="flash-auto" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
+    },
+    on: {
+        mode: FlashMode.on,
+        jsx: <MaterialIcons name="flash-on" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
+    },
+    off: {
+        mode: FlashMode.off,
+        jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
+    },
+    torch: {
+        mode: FlashMode.torch,
+        jsx: <MaterialIcons name="flash-on" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
+    }
+}

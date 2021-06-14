@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "camera-test",
-    "slug": "camera-test",
+    "name": "camera-app",
+    "slug": "camera-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -27,6 +27,7 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "description": "Implementation of a camera app with QR scanning and video support."
   }
 }
