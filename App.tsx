@@ -9,10 +9,15 @@ import * as MediaLibrary from 'expo-media-library';
 import { Entypo, MaterialIcons } from '@expo/vector-icons';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import ViewShot from 'react-native-view-shot';
-import { CameraType } from 'expo-camera/build/Camera.types';
+import { CameraType, FlashMode } from 'expo-camera/build/Camera.types';
 import * as ImageManipulator from 'expo-image-manipulator';
 
 let barcodeLinkTimeout: any = null;
+
+interface Flash {
+    mode: FlashMode,
+    jsx: JSX.Element
+}
 
 export default function App() {
     const [hasPermission, setHasPermission] = useState<boolean | null>(null);
@@ -24,6 +29,10 @@ export default function App() {
     const [barcodeLink, setBarcodeLink] = useState<string>('');
     const [lastImage, setLastImage] = useState<string>('');
     const [isRecording, setIsRecording] = useState<boolean>(false);
+    const [flashMode, setFlashMode] = useState<Flash>({
+        mode: FlashMode.off,
+        jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
+    });
 
     useEffect(() => {
         Camera.requestPermissionsAsync()
@@ -71,7 +80,7 @@ export default function App() {
     }
 
     const handleTakePhoto = () => {
-        if (isRecording) {
+        if (isRecording || flashMode.mode === FlashMode.torch) {
             if (cameraViewShot) {
                 let cap = cameraViewShot.capture;
                 if (cap) {
@@ -129,6 +138,8 @@ export default function App() {
                 setLastImage(uri);
             })
         setIsRecording(true);
+
+        if (flashMode.mode === FlashMode.on) setFlashMode(f => ({ ...f, mode: FlashMode.torch }));
     }
 
     const handleStopRecording = () => {
@@ -154,6 +165,34 @@ export default function App() {
         }, 1000)
     }
 
+    const handleFlashToggle = () => {
+        setFlashMode(f => {
+            if (f.mode === FlashMode.off) return {
+                mode: FlashMode.auto,
+                jsx: <MaterialIcons name="flash-auto" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
+            }
+            if (f.mode === FlashMode.auto) return {
+                mode: FlashMode.on,
+                jsx: <MaterialIcons name="flash-on" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
+            }
+            if (f.mode === FlashMode.on) return {
+                mode: FlashMode.off,
+                jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
+            }
+            return {
+                mode: FlashMode.off,
+                jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
+            }
+        })
+    }
+
+    const handleTorchToggle = () => {
+        setFlashMode(f => {
+            if (f.mode === FlashMode.torch) return { ...f, mode: FlashMode.on }
+            else return { ...f, mode: FlashMode.torch }
+        })
+    }
+
     return (
         <SafeAreaView style={styles.container}>
             <SafeAreaView style={styles.container}>
@@ -161,6 +200,7 @@ export default function App() {
                     <Camera
                         style={{ width: '100%', height: '100%' }}
                         type={camType}
+                        flashMode={flashMode.mode}
                         ref={(ref) => setCamera(ref)}
                         onCameraReady={() => onCameraReady()}
                         barCodeScannerSettings={{ barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr] }}
@@ -169,15 +209,33 @@ export default function App() {
                 </ViewShot>
             </SafeAreaView>
             <SafeAreaView style={styles.cameraUI}>
-                <View style={{ width: '100%', alignContent: 'center' }}>
+                <View style={{ justifyContent: 'space-between', flexDirection: 'row', flex: 1, paddingVertical: 10 }}>
                     <TouchableHighlight
                         style={barcodeLink ? styles.barcodeLinkContainer : { display: 'none', width: 0 }}
                         onPress={() => WebBrowser.openBrowserAsync(barcodeLink)}
                         underlayColor={'#f0f7ff'}>
                         <Text style={styles.barcodeLink}>{barcodeLink}</Text>
                     </TouchableHighlight>
+                    <View></View>
+                    <View style={{ flex: 1, flexDirection: 'row', alignContent: 'center', justifyContent: 'space-between' }}>
+
+                    </View>
+                    <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
+                        <TouchableHighlight style={styles.flashContainer} onPress={handleFlashToggle}>
+                            {flashMode.jsx}
+                        </TouchableHighlight>
+                        {flashMode.mode === FlashMode.on || flashMode.mode === FlashMode.torch ? (
+                            <TouchableHighlight
+                                style={{ ...styles.torchButton, backgroundColor: flashMode.mode === FlashMode.torch ? '#ffd469' : '#d0d0d0' }}
+                                onPress={handleTorchToggle}
+                                hitSlop={{ bottom: 8, top: 8, left: 8, right: 8 }}><Text></Text>
+                            </TouchableHighlight>
+                        ) : (
+                            <View />
+                        )}
+                    </View>
                 </View>
-                <View>
+                <View style={{ width: '100%' }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 15 }}>
                         {isRecording ? (
                             <TouchableHighlight onPress={handleStopRecording} style={{ ...styles.photoButton, ...styles.record, backgroundColor: '#d0d0d0', }}>
@@ -199,7 +257,7 @@ export default function App() {
                         </View>
                         <View style={{ width: '30%', alignItems: 'center' }}>
                             <TouchableHighlight onPress={handleTakePhoto} style={styles.photoButton}>
-                                <Entypo name="camera" size={Dimensions.get('window').width * .15} color="black" style={styles.icon} />
+                                <Entypo name="camera" size={Dimensions.get('window').width * .13} color="black" style={styles.icon} />
                             </TouchableHighlight>
                         </View>
                         <View style={{ width: '30%', alignItems: 'center' }}>
@@ -259,7 +317,7 @@ const styles = StyleSheet.create({
         height: 'auto'
     },
     icon: {
-        padding: 10
+        padding: 7
     },
     recordIcon: {
         width: Dimensions.get('window').width * .1,
@@ -272,6 +330,24 @@ const styles = StyleSheet.create({
     mediaPreview: {
         width: '100%',
         height: '100%',
-        backgroundColor: 'black'
+        backgroundColor: 'black',
+        borderWidth: 2,
+        borderColor: '#d0d0d0',
+        borderRadius: 3
+    },
+    flashContainer: {
+        backgroundColor: 'black',
+        borderWidth: 2,
+        borderColor: '#d0d0d0',
+        borderRadius: 100
+    },
+    torchButton: {
+        marginTop: 10,
+        width: Dimensions.get('window').width * .05,
+        height: Dimensions.get('window').width * .05,
+        backgroundColor: '#d0d0d0',
+        borderRadius: 100,
+        borderWidth: 2,
+        borderColor: '#d0d0d0'
     }
 });
