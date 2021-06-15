@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, TouchableHighlight, Dimensions, Image, Platform } from 'react-native';
+import { StyleSheet, Text, View, TouchableHighlight, Dimensions, Image, Platform, Alert } from 'react-native';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BarCodeScanner } from 'expo-barcode-scanner';
-import * as WebBrowser from 'expo-web-browser';
 import * as MediaLibrary from 'expo-media-library';
 import { Entypo, MaterialIcons } from '@expo/vector-icons';
 import * as VideoThumbnails from 'expo-video-thumbnails';
@@ -14,144 +13,147 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as Linking from 'expo-linking';
 import * as Brightness from 'expo-brightness';
 
-let barcodeLinkTimeout: any = null;
+import QRLink from './components/QRLink';
 
-interface Flash {
-    mode: FlashMode,
-    jsx: JSX.Element
+import permissions from './lib/permissions';
+import { PreviewStyle, FlashOptions, FlashSetting, Permissions } from './lib/types';
+
+let barcodeLinkTimeout: any = null;
+let cameraViewShot: ViewShot | null = null;
+let camera: Camera | null = null;
+
+interface State {
+    permissions: Permissions
+    cameraType: CameraType,
+    aspectRatios: string[],
+    barcodeLink: string,
+    recentImageThumbnail: string,
+    isRecording: boolean,
+    previewStyle: PreviewStyle,
+    flashSetting: FlashSetting
 }
 
-export default function App() {
-    const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-    const [audioPermission, setAudioPermission] = useState<boolean | null>(null);
-    const [camType, setCamType] = useState<'back' | 'front'>('back');
-    const [camera, setCamera] = useState<Camera | null>(null);
-    const [cameraViewShot, setCameraViewShot] = useState<ViewShot | null>(null);
-    const [cameraData, setCameraData] = useState<any>(null);
-    const [barcodeLink, setBarcodeLink] = useState<string>('');
-    const [lastImage, setLastImage] = useState<string>('');
-    const [isRecording, setIsRecording] = useState<boolean>(false);
-    const [flashMode, setFlashMode] = useState<Flash>({
-        mode: FlashMode.off,
-        jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
-    });
-    const [containPreview, setContainPreview] = useState<boolean>(true);
+export default class App extends React.Component<{}, State> {
 
-    useEffect(() => {
-        Camera.requestPermissionsAsync()
-            .then(({ status }) => {
-                if (status === 'granted') return;
-                else throw new Error('Camera Permission Denied');
+    constructor(props: {}) {
+        super(props);
+
+        this.state = {
+            permissions: { camera: null, audio: null, mediaLibrary: null, brightness: null },
+            cameraType: CameraType.back,
+            aspectRatios: [],
+            barcodeLink: '',
+            recentImageThumbnail: '',
+            isRecording: false,
+            previewStyle: PreviewStyle.cover,
+            flashSetting: FlashOptions.off
+        }
+
+        this.onCameraReady = this.onCameraReady.bind(this);
+        this.flipImage = this.flipImage.bind(this);
+        this.capturePreview = this.capturePreview.bind(this);
+        this.handleTakePhoto = this.handleTakePhoto.bind(this);
+        this.recordvideo = this.recordvideo.bind(this);
+        this.handleRecordVideo = this.handleRecordVideo.bind(this);
+        this.stopRecording = this.stopRecording.bind(this);
+        this.handleFlip = this.handleFlip.bind(this);
+        this.handleBarcodeScanned = this.handleBarcodeScanned.bind(this);
+        this.handleFlashToggle = this.handleFlashToggle.bind(this);
+        this.handleTorchToggle = this.handleTorchToggle.bind(this);
+        this.togglePreviewStyle = this.togglePreviewStyle.bind(this);
+        this.openPhotos = this.openPhotos.bind(this);
+    }
+
+    componentDidMount() {
+        permissions.camera()
+            .then((allowed) => {
+                this.setState(currentState => ({ permissions: { ...currentState.permissions, camera: allowed } }));
+                if (allowed) {
+                    return permissions.mediaLibrary()
+                }
+                else {
+                    throw new Error('Access Denied');
+                }
             })
-            .then(() => {
-                return MediaLibrary.requestPermissionsAsync();
-            })
-            .then(({ status }) => {
-                if (status === 'granted') setHasPermission(true);
-                else throw new Error('Media Library Permission Denied');
+            .then((allowed) => {
+                this.setState(currentState => ({ permissions: { ...currentState.permissions, mediaLibrary: allowed } }));
             })
             .catch(e => {
-                console.warn(e);
-                setHasPermission(false);
+                console.log(e.message);
             })
-    }, [])
-
-    const onCameraReady = async () => {
-
-        if (camera === null || cameraData !== null) { return null; }
-        const ratios = await camera.getSupportedRatiosAsync();
-        //console.log(ratios);
-
-        const sizes = await camera.getAvailablePictureSizesAsync('4:3');
-        //console.log(sizes);
-
-        setCameraData({ ratios, sizes })
     }
 
-    if (hasPermission === null) {
-        return <View></View>
-    }
-    if (hasPermission === false) {
-        return <View><Text>No access to camera or media library. Check permission settings.</Text></View>
+    async onCameraReady() {
+        let aspectRatios = this.state.aspectRatios;
+
+        if (camera !== null && aspectRatios === null) {
+            const ratios = await camera.getSupportedRatiosAsync();
+            //console.log(ratios);
+            //const sizes = await camera.getAvailablePictureSizesAsync('4:3');
+            //console.log(sizes);
+            this.setState({ aspectRatios: ratios });
+        }
     }
 
-    const flipImage = (uri: string) => {
+    flipImage(uri: string) {
         return ImageManipulator.manipulateAsync(uri, [{
             flip: ImageManipulator.FlipType.Horizontal
         }])
             .then(({ uri }) => uri);
     }
 
-    const capturePreview = () => {
-        if (cameraViewShot) {
-            let cap = cameraViewShot.capture;
-            if (cap) {
-                cap().then(uri => {
-                    if (camType === CameraType.front) {
-                        return flipImage(uri);
-                    }
-                    else return uri;
+    capturePreview() {
+        if (!cameraViewShot) return;
+
+        let cap = cameraViewShot.capture;
+        if (cap) {
+            cap().then(uri => {
+                if (this.state.cameraType === CameraType.front) {
+                    return this.flipImage(uri);
+                }
+                else return uri;
+            })
+                .then(uri => {
+                    return MediaLibrary.createAssetAsync(uri);
                 })
-                    .then(uri => {
-                        return MediaLibrary.createAssetAsync(uri);
-                    })
-                    .then(({ uri }) => {
-                        setLastImage(uri);
-                    })
-            }
+                .then(({ uri }) => {
+                    this.setState({ recentImageThumbnail: uri });
+                })
         }
     }
 
-    const handleTakePhoto = () => {
-        if (isRecording) {
-            capturePreview();
+    handleTakePhoto() {
+        let _s = this.state;
+        if (!camera) return;
+
+        if (_s.isRecording) {
+            this.capturePreview();
             return;
         }
-
-        if (flashMode.mode === FlashMode.torch && camType === CameraType.back) capturePreview();
-        if (camType === CameraType.front && flashMode.mode === FlashMode.on) {
-            setFlashMode(FlashTypes.torch);
-
-            camera?.takePictureAsync()
-                .then((data) => {
-                    setFlashMode(FlashTypes.on);
-                    return MediaLibrary.createAssetAsync(data.uri);
-                })
-                .then((data) => {
-                    console.log(data.uri);
-                    setLastImage(data.uri);
-                })
-                .catch(e => {
-                    console.warn(e);
-                })
+        if (_s.flashSetting.mode === FlashMode.torch && _s.cameraType === CameraType.back) {
+            this.capturePreview();
         }
-        else {
-            camera?.takePictureAsync()
-                .then((data) => {
-                    return MediaLibrary.createAssetAsync(data.uri);
-                })
-                .then((data) => {
-                    console.log(data.uri);
-                    setLastImage(data.uri);
-                })
-                .catch(e => {
-                    console.warn(e);
-                })
-        }
+
+        let frontFlash = (_s.cameraType === CameraType.front && _s.flashSetting.mode === FlashMode.on) ? true : false;
+        if (frontFlash) this.setState({ flashSetting: FlashOptions.torch })
+
+        // Take photo
+        camera?.takePictureAsync()
+            .then((data) => {
+                if (frontFlash) this.setState({ flashSetting: FlashOptions.on });
+                return MediaLibrary.createAssetAsync(data.uri);
+            })
+            .then((data) => {
+                this.setState({ recentImageThumbnail: data.uri });
+            })
+            .catch(e => {
+                console.warn(e);
+            })
     }
 
-    const handleRecordVideo = async () => {
-        if (!audioPermission) {
-            Audio.requestPermissionsAsync()
-                .then(({ status }) => {
-                    if (status === 'granted') setAudioPermission(true)
-                    else throw new Error('Audio permisson denied');
-                })
-                .catch(e => {
-                    console.warn(e);
-                    return;
-                })
-        }
+    recordvideo() {
+        let _s = this.state;
+        if (!camera) return;
 
         camera?.recordAsync()
             .then(({ uri }) => {
@@ -161,73 +163,108 @@ export default function App() {
                 return VideoThumbnails.getThumbnailAsync(uri);
             })
             .then(({ uri }) => {
-                setLastImage(uri);
+                this.setState({ recentImageThumbnail: uri })
             })
-        setIsRecording(true);
+        this.setState({ isRecording: true })
 
-        if (flashMode.mode === FlashMode.on) setFlashMode(f => ({ ...f, mode: FlashMode.torch }));
+        if (_s.flashSetting.mode === FlashMode.on) this.setState({ flashSetting: FlashOptions.torch });
     }
 
-    const handleStopRecording = () => {
-        camera?.stopRecording();
-        setIsRecording(false);
-    }
+    handleRecordVideo() {
+        let _s = this.state;
 
-    const handleFlip = () => {
-        if (camType === CameraType.back) {
-            setCamType(CameraType.front);
-            setFlashMode(FlashTypes.off);
+        if (_s.permissions.audio === null) {
+            permissions.audio()
+                .then(allowed => {
+                    this.setState(currentState => ({ permissions: { ...currentState.permissions, audio: allowed } }));
+                    if (allowed) this.recordvideo();
+                })
+        }
+        else if (_s.permissions.audio === false) {
+            Alert.alert(
+                'Microphone Access Denied',
+                'Cannot record video without microphone permission. Check permission settings to allow.'
+            )
         }
         else {
-            setCamType(CameraType.back);
-            if (flashMode.mode === FlashMode.torch) {
-                setFlashMode(FlashTypes.on);
-            }
+            this.recordvideo();
         }
-
-        if (isRecording) setIsRecording(false);
     }
 
-    const handleBarcodeScanned = (data: string) => {
+    stopRecording() {
+        if (!camera) return;
+
+        camera.stopRecording();
+        this.setState({ isRecording: false })
+    }
+
+    handleFlip() {
+        let _s = this.state;
+
+        if (_s.cameraType === CameraType.back) {
+            this.setState({
+                cameraType: CameraType.front,
+                flashSetting: FlashOptions.off
+            })
+        }
+        else {
+            this.setState({
+                cameraType: CameraType.back,
+                flashSetting: FlashOptions.off
+            })
+        }
+
+        if (_s.isRecording) this.setState({ isRecording: false })
+    }
+
+    handleBarcodeScanned(data: string) {
         if (barcodeLinkTimeout) clearTimeout(barcodeLinkTimeout);
-        setBarcodeLink(data);
+        this.setState({ barcodeLink: data })
 
         barcodeLinkTimeout = setTimeout(() => {
-            setBarcodeLink('');
+            this.setState({ barcodeLink: '' })
         }, 1000)
     }
 
-    const handleFlashToggle = () => {
-        if (camType === CameraType.back) {
-            setFlashMode(f => {
-                if (f.mode === FlashMode.off) return FlashTypes.auto;
-                if (f.mode === FlashMode.auto) return FlashTypes.on;
-                if (f.mode === FlashMode.on) return FlashTypes.off
-                return FlashTypes.off;
+    handleFlashToggle() {
+        let _s = this.state;
+
+        // For back camera, switch to next flash setting
+        if (_s.cameraType === CameraType.back) {
+            this.setState(currentState => {
+                let f = currentState.flashSetting;
+                if (f.mode === FlashMode.off) return { flashSetting: FlashOptions.auto };
+                if (f.mode === FlashMode.auto) return { flashSetting: FlashOptions.on };
+                if (f.mode === FlashMode.on) return { flashSetting: FlashOptions.off };
+                return { flashSetting: FlashOptions.off };
             })
         }
-        else if (flashMode.mode === FlashMode.off) {
-
-            setFlashMode(FlashTypes.on);
+        // For front camera, toggle (between on and off)
+        else if (_s.flashSetting.mode === FlashMode.off) {
+            this.setState({ flashSetting: FlashOptions.on })
         }
         else {
-            setFlashMode(FlashTypes.off);
+            this.setState({ flashSetting: FlashOptions.off })
         }
     }
 
-    const handleTorchToggle = () => {
-        setFlashMode(f => {
-            if (f.mode === FlashMode.torch) return FlashTypes.on;
-            else return FlashTypes.torch;
+    handleTorchToggle() {
+        this.setState(currentState => {
+            let f = currentState.flashSetting;
+            if (f.mode === FlashMode.torch) return { flashSetting: FlashOptions.on };
+            else return { flashSetting: FlashOptions.torch };
         })
     }
 
-    const togglePreview = () => {
-        if (isRecording) return;
-        setContainPreview(c => !c);
+    togglePreviewStyle() {
+        if (this.state.isRecording) return;
+        this.setState(currentState => {
+            let style = currentState.previewStyle;
+            return style === PreviewStyle.contain ? { previewStyle: PreviewStyle.cover } : { previewStyle: PreviewStyle.contain }
+        });
     }
 
-    const openPhotos = () => {
+    openPhotos() {
         switch (Platform.OS) {
             case "ios":
                 Linking.openURL("photos-redirect://");
@@ -240,100 +277,115 @@ export default function App() {
         }
     }
 
-    const frontFlashOn = (): boolean => {
-        return flashMode.mode === FlashMode.torch && camType === CameraType.front
+    render() {
+        let _s = this.state;
+
+        let frontFlashOn = _s.flashSetting.mode === FlashMode.torch && _s.cameraType === CameraType.front;
+
+        let viewShotStyle = _s.previewStyle === PreviewStyle.contain
+            ? { ...styles.camera, ...styles.cameraContain }
+            : { ...styles.camera, ...styles.cameraCover }
+        let frontFlashStyle = {
+            width: '100%', height: '100%', backgroundColor: frontFlashOn
+                ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0)'
+        }
+
+        if (_s.permissions.camera === false || _s.permissions.mediaLibrary === false) {
+            return (
+                <SafeAreaView style={{ width: '100%', height: '100%', backgroundColor: 'black', justifyContent: 'center' }}>
+                    <Text style={{ color: 'white', textAlign: 'center' }}>Permission denied, camera cannot be accessed. Check permission settings to allow.</Text>
+                </SafeAreaView>
+            )
+        }
+        else if (_s.permissions.camera === null || _s.permissions.mediaLibrary === null) {
+            return (
+                <SafeAreaView style={{ width: '100%', height: '100%', backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' }}>
+                    <Entypo name="camera" size={Dimensions.get('window').width * .15} color="white" />
+                </SafeAreaView>
+            )
+        }
+
+        return (
+            <SafeAreaView style={{ ...styles.container, backgroundColor: frontFlashOn ? 'white' : 'black' }}>
+                <SafeAreaView style={styles.container}>
+                    <ViewShot ref={(ref) => cameraViewShot = ref}
+                        options={{ format: "jpg", quality: 1 }}
+                        style={viewShotStyle}>
+                        <Camera
+                            style={{ width: '100%', height: '100%' }}
+                            type={_s.cameraType}
+                            flashMode={_s.flashSetting.mode}
+                            ref={(ref) => camera = ref}
+                            onCameraReady={() => this.onCameraReady()}
+                            barCodeScannerSettings={{ barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr] }}
+                            onBarCodeScanned={({ data }) => this.handleBarcodeScanned(data)}>
+                            <View
+                                style={frontFlashStyle}>
+                            </View>
+                        </Camera>
+                    </ViewShot>
+                </SafeAreaView>
+                <SafeAreaView style={styles.cameraUI}>
+                    <View style={{ justifyContent: 'space-between', flexDirection: 'row', flex: 1, paddingVertical: 10 }}>
+                        <QRLink link={_s.barcodeLink} />
+                        <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
+                            <TouchableHighlight style={{ ...styles.switchButton, opacity: _s.isRecording ? 0 : 1 }} onPress={this.togglePreviewStyle}>
+                                <MaterialIcons name="preview" size={Dimensions.get('window').width * .06} color="black" style={styles.icon} />
+                            </TouchableHighlight>
+                        </View>
+                        <View style={{ flex: 1, flexDirection: 'row', alignContent: 'center', justifyContent: 'space-between' }}>
+
+                        </View>
+                        <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
+                            <TouchableHighlight style={styles.flashContainer} onPress={this.handleFlashToggle}>
+                                {_s.flashSetting.icon}
+                            </TouchableHighlight>
+                            {_s.flashSetting.mode === FlashMode.on || _s.flashSetting.mode === FlashMode.torch ? (
+                                <TouchableHighlight
+                                    style={{ ...styles.torchButton, backgroundColor: _s.flashSetting.mode === FlashMode.torch ? '#ffd469' : '#d0d0d0' }}
+                                    onPress={this.handleTorchToggle}
+                                    hitSlop={{ bottom: 8, top: 8, left: 8, right: 8 }}><Text></Text>
+                                </TouchableHighlight>
+                            ) : (
+                                <View />
+                            )}
+                        </View>
+                    </View>
+                    <View style={{ width: '100%' }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 15 }}>
+                            {_s.isRecording ? (
+                                <TouchableHighlight onPress={this.stopRecording} style={{ ...styles.photoButton, ...styles.record, backgroundColor: '#d0d0d0', }}>
+                                    <Entypo name="controller-stop" size={Dimensions.get('window').width * .1} color="red" />
+                                </TouchableHighlight>
+                            ) : (
+                                <TouchableHighlight onPress={this.handleRecordVideo} style={{ ...styles.photoButton, ...styles.record, backgroundColor: 'red', }}>
+                                    <View style={styles.recordIcon}></View>
+                                </TouchableHighlight>
+                            )}
+                        </View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <View style={{ width: '30%', alignItems: 'center' }}>
+                                <TouchableHighlight style={{ width: Dimensions.get('window').width * .15, height: Dimensions.get('window').width * .15 }}
+                                    onPress={this.openPhotos}>
+                                    {_s.recentImageThumbnail ? <Image source={{ uri: _s.recentImageThumbnail }} style={styles.mediaPreview} /> : <View style={styles.mediaPreview}></View>}
+                                </TouchableHighlight>
+                            </View>
+                            <View style={{ width: '30%', alignItems: 'center' }}>
+                                <TouchableHighlight onPress={this.handleTakePhoto} style={styles.photoButton}>
+                                    <Entypo name="camera" size={Dimensions.get('window').width * .13} color="black" style={styles.icon} />
+                                </TouchableHighlight>
+                            </View>
+                            <View style={{ width: '30%', alignItems: 'center' }}>
+                                <TouchableHighlight onPress={this.handleFlip} style={{ ...styles.photoButton, backgroundColor: 'black', borderColor: '#303030' }}>
+                                    <MaterialIcons name="flip-camera-android" size={Dimensions.get('window').width * .1} color="white" style={styles.icon} />
+                                </TouchableHighlight>
+                            </View>
+                        </View>
+                    </View>
+                </SafeAreaView>
+            </SafeAreaView>
+        );
     }
-
-    return (
-        <SafeAreaView style={{ ...styles.container, backgroundColor: frontFlashOn() ? 'white' : 'black' }}>
-            <SafeAreaView style={styles.container}>
-                <ViewShot ref={(ref) => setCameraViewShot(ref)}
-                    options={{ format: "jpg", quality: 1 }}
-                    style={containPreview ? { ...styles.camera, ...styles.cameraContain } : { ...styles.camera, ...styles.cameraCover }}>
-                    <Camera
-                        style={{ width: '100%', height: '100%' }}
-                        type={camType}
-                        flashMode={flashMode.mode}
-                        ref={(ref) => setCamera(ref)}
-                        onCameraReady={() => onCameraReady()}
-                        barCodeScannerSettings={{ barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr] }}
-                        onBarCodeScanned={({ data }) => handleBarcodeScanned(data)}>
-                        <View
-                            style={{
-                                width: '100%', height: '100%', backgroundColor: frontFlashOn()
-                                    ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0)'
-                            }}>
-                        </View>
-                    </Camera>
-                </ViewShot>
-            </SafeAreaView>
-            <SafeAreaView style={styles.cameraUI}>
-                <View style={{ justifyContent: 'space-between', flexDirection: 'row', flex: 1, paddingVertical: 10 }}>
-                    <TouchableHighlight
-                        style={barcodeLink ? styles.barcodeLinkContainer : { display: 'none', width: 0 }}
-                        onPress={() => WebBrowser.openBrowserAsync(barcodeLink)}
-                        underlayColor={'#f0f7ff'}>
-                        <Text style={styles.barcodeLink}>{barcodeLink}</Text>
-                    </TouchableHighlight>
-                    <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
-                        <TouchableHighlight style={{ ...styles.switchButton, opacity: isRecording ? 0 : 1 }} onPress={togglePreview}>
-                            <MaterialIcons name="preview" size={Dimensions.get('window').width * .06} color="black" style={styles.icon} />
-                        </TouchableHighlight>
-                    </View>
-                    <View style={{ flex: 1, flexDirection: 'row', alignContent: 'center', justifyContent: 'space-between' }}>
-
-                    </View>
-                    <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
-                        <TouchableHighlight style={styles.flashContainer} onPress={handleFlashToggle}>
-                            {flashMode.jsx}
-                        </TouchableHighlight>
-                        {flashMode.mode === FlashMode.on || flashMode.mode === FlashMode.torch ? (
-                            <TouchableHighlight
-                                style={{ ...styles.torchButton, backgroundColor: flashMode.mode === FlashMode.torch ? '#ffd469' : '#d0d0d0' }}
-                                onPress={handleTorchToggle}
-                                hitSlop={{ bottom: 8, top: 8, left: 8, right: 8 }}><Text></Text>
-                            </TouchableHighlight>
-                        ) : (
-                            <View />
-                        )}
-                    </View>
-                </View>
-                <View style={{ width: '100%' }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 15 }}>
-                        {isRecording ? (
-                            <TouchableHighlight onPress={handleStopRecording} style={{ ...styles.photoButton, ...styles.record, backgroundColor: '#d0d0d0', }}>
-                                <Entypo name="controller-stop" size={Dimensions.get('window').width * .1} color="red" />
-                            </TouchableHighlight>
-                        ) : (
-                            <TouchableHighlight onPress={handleRecordVideo} style={{ ...styles.photoButton, ...styles.record, backgroundColor: 'red', }}>
-                                <View style={styles.recordIcon}></View>
-                            </TouchableHighlight>
-                        )}
-
-
-                    </View>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <View style={{ width: '30%', alignItems: 'center' }}>
-                            <TouchableHighlight style={{ width: Dimensions.get('window').width * .15, height: Dimensions.get('window').width * .15 }}
-                                onPress={openPhotos}>
-                                {lastImage ? <Image source={{ uri: lastImage }} style={styles.mediaPreview} /> : <View style={styles.mediaPreview}></View>}
-                            </TouchableHighlight>
-                        </View>
-                        <View style={{ width: '30%', alignItems: 'center' }}>
-                            <TouchableHighlight onPress={handleTakePhoto} style={styles.photoButton}>
-                                <Entypo name="camera" size={Dimensions.get('window').width * .13} color="black" style={styles.icon} />
-                            </TouchableHighlight>
-                        </View>
-                        <View style={{ width: '30%', alignItems: 'center' }}>
-                            <TouchableHighlight onPress={handleFlip} style={{ ...styles.photoButton, backgroundColor: 'black', borderColor: '#303030' }}>
-                                <MaterialIcons name="flip-camera-android" size={Dimensions.get('window').width * .1} color="white" style={styles.icon} />
-                            </TouchableHighlight>
-                        </View>
-                    </View>
-                </View>
-            </SafeAreaView>
-        </SafeAreaView>
-    );
 }
 
 const styles = StyleSheet.create({
@@ -429,22 +481,3 @@ const styles = StyleSheet.create({
         borderColor: 'white'
     }
 });
-
-const FlashTypes = {
-    auto: {
-        mode: FlashMode.auto,
-        jsx: <MaterialIcons name="flash-auto" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
-    },
-    on: {
-        mode: FlashMode.on,
-        jsx: <MaterialIcons name="flash-on" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
-    },
-    off: {
-        mode: FlashMode.off,
-        jsx: <MaterialIcons name="flash-off" size={Dimensions.get('window').width * .06} color="white" style={styles.icon} />
-    },
-    torch: {
-        mode: FlashMode.torch,
-        jsx: <MaterialIcons name="flash-on" size={Dimensions.get('window').width * .06} color="#ffd469" style={styles.icon} />
-    }
-}
