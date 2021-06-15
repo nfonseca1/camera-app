@@ -127,7 +127,9 @@ export default class App extends React.Component<{}, State> {
         if (!camera) return;
 
         if (_s.isRecording) {
-            this.capturePreview();
+            if (!(_s.cameraType === CameraType.front && _s.flashSetting.mode === FlashMode.torch)) {
+                this.capturePreview();
+            }
             return;
         }
         if (_s.flashSetting.mode === FlashMode.torch && _s.cameraType === CameraType.back) {
@@ -208,6 +210,7 @@ export default class App extends React.Component<{}, State> {
             })
         }
         else {
+            Brightness.useSystemBrightnessAsync();
             this.setState({
                 cameraType: CameraType.back,
                 flashSetting: FlashOptions.off
@@ -241,7 +244,29 @@ export default class App extends React.Component<{}, State> {
         }
         // For front camera, toggle (between on and off)
         else if (_s.flashSetting.mode === FlashMode.off) {
-            this.setState({ flashSetting: FlashOptions.on })
+
+            const toggle = () => {
+
+                this.setState({ flashSetting: FlashOptions.on })
+            }
+
+            if (_s.permissions.brightness === null) {
+                permissions.brightness()
+                    .then(allowed => {
+                        this.setState(currentState => ({ permissions: { ...currentState.permissions, brightness: allowed } }));
+                        if (allowed) toggle();
+                    })
+            }
+            else if (_s.permissions.brightness === false) {
+                Alert.alert(
+                    'Brightness Access Denied',
+                    'Cannot use front flash without brightness permission. Check permission settings to allow.'
+                )
+            }
+            else {
+                toggle();
+            }
+
         }
         else {
             this.setState({ flashSetting: FlashOptions.off })
@@ -303,6 +328,11 @@ export default class App extends React.Component<{}, State> {
                     <Entypo name="camera" size={Dimensions.get('window').width * .15} color="white" />
                 </SafeAreaView>
             )
+        }
+
+        if (_s.cameraType === CameraType.front) {
+            if (_s.flashSetting.mode === FlashMode.torch) Brightness.setBrightnessAsync(1);
+            else if (_s.flashSetting.mode === FlashMode.on) Brightness.useSystemBrightnessAsync();
         }
 
         return (
