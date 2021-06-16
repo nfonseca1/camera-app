@@ -12,13 +12,16 @@ import { CameraType, FlashMode } from 'expo-camera/build/Camera.types';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Linking from 'expo-linking';
 import * as Brightness from 'expo-brightness';
+import GestureRecognizer from 'react-native-swipe-gestures';
 
 import QRLink from './components/QRLink';
 
 import permissions from './lib/permissions';
 import { PreviewStyle, FlashOptions, FlashSetting, Permissions } from './lib/types';
+import { ViewStyle } from 'react-native';
 
 let barcodeLinkTimeout: any = null;
+let viewMessageTimeout: any = null;
 let cameraViewShot: ViewShot | null = null;
 let camera: Camera | null = null;
 
@@ -26,6 +29,8 @@ interface State {
     permissions: Permissions
     cameraType: CameraType,
     aspectRatios: string[],
+    activeRatio: number | null,
+    viewMessage: string,
     barcodeLink: string,
     recentImageThumbnail: string,
     isRecording: boolean,
@@ -42,6 +47,8 @@ export default class App extends React.Component<{}, State> {
             permissions: { camera: null, audio: null, mediaLibrary: null, brightness: null },
             cameraType: CameraType.back,
             aspectRatios: [],
+            activeRatio: null,
+            viewMessage: '',
             barcodeLink: '',
             recentImageThumbnail: '',
             isRecording: false,
@@ -62,6 +69,7 @@ export default class App extends React.Component<{}, State> {
         this.handleTorchToggle = this.handleTorchToggle.bind(this);
         this.togglePreviewStyle = this.togglePreviewStyle.bind(this);
         this.openPhotos = this.openPhotos.bind(this);
+        this.toggleRatio = this.toggleRatio.bind(this);
     }
 
     componentDidMount() {
@@ -84,14 +92,12 @@ export default class App extends React.Component<{}, State> {
     }
 
     async onCameraReady() {
-        let aspectRatios = this.state.aspectRatios;
+        let activeRatio = this.state.activeRatio;
 
-        if (camera !== null && aspectRatios === null) {
+        if (camera !== null && activeRatio === null) {
             const ratios = await camera.getSupportedRatiosAsync();
-            //console.log(ratios);
-            //const sizes = await camera.getAvailablePictureSizesAsync('4:3');
-            //console.log(sizes);
-            this.setState({ aspectRatios: ratios });
+            let idx = ratios.indexOf('4:3');
+            this.setState({ aspectRatios: ratios, activeRatio: idx === -1 ? 0 : idx });
         }
     }
 
@@ -302,16 +308,55 @@ export default class App extends React.Component<{}, State> {
         }
     }
 
+    toggleRatio(increment: 1 | -1 = 1) {
+        let _s = this.state;
+
+        if (_s.activeRatio != null) {
+            let next = _s.activeRatio + increment;
+            let idx = 0;
+            if (next < _s.aspectRatios.length) idx = next;
+            if (next < 0) idx = _s.aspectRatios.length - 1;
+            this.setState({ activeRatio: idx, viewMessage: _s.aspectRatios[idx] });
+
+            if (viewMessageTimeout) clearTimeout(viewMessageTimeout);
+            viewMessageTimeout = setTimeout(() => this.setState({ viewMessage: '' }), 1000)
+        }
+    }
+
     render() {
         let _s = this.state;
 
         let frontFlashOn = _s.flashSetting.mode === FlashMode.torch && _s.cameraType === CameraType.front;
 
+        let ratioProp = _s.activeRatio != null ? { ratio: _s.aspectRatios[_s.activeRatio] } : null;
+        let camStyles = {
+            cameraCover: {
+                width: Dimensions.get('window').height * .75,
+                height: Dimensions.get('window').height,
+            },
+            cameraContain: {
+                width: Dimensions.get('window').width,
+                height: Dimensions.get('window').width * 1.333,
+            }
+        }
+
+        if (ratioProp?.ratio != null) {
+            let wh = ratioProp.ratio.split(':');
+            let w = parseInt(wh[0]);
+            let h = parseInt(wh[1]);
+            camStyles.cameraCover.width = Dimensions.get('window').height * (h / w);
+            camStyles.cameraCover.height = Dimensions.get('window').height;
+            camStyles.cameraContain.width = Dimensions.get('window').width;
+            camStyles.cameraContain.height = Dimensions.get('window').width * (w / h);
+        }
+
+        let containerStyle: ViewStyle = camStyles.cameraContain.height >= Dimensions.get('window').height * .7
+            ? { justifyContent: 'center' } : {}
         let viewShotStyle = _s.previewStyle === PreviewStyle.contain
-            ? { ...styles.camera, ...styles.cameraContain }
-            : { ...styles.camera, ...styles.cameraCover }
-        let frontFlashStyle = {
-            width: '100%', height: '100%', backgroundColor: frontFlashOn
+            ? { ...styles.camera, ...camStyles.cameraContain, marginTop: Dimensions.get('window').height * .12 }
+            : { ...styles.camera, ...camStyles.cameraCover }
+        let frontFlashStyle: ViewStyle = {
+            width: '100%', height: '100%', justifyContent: 'center', backgroundColor: frontFlashOn
                 ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0)'
         }
 
@@ -336,84 +381,96 @@ export default class App extends React.Component<{}, State> {
         }
 
         return (
-            <SafeAreaView style={{ ...styles.container, backgroundColor: frontFlashOn ? 'white' : 'black' }}>
-                <SafeAreaView style={styles.container}>
-                    <ViewShot ref={(ref) => cameraViewShot = ref}
-                        options={{ format: "jpg", quality: 1 }}
-                        style={viewShotStyle}>
-                        <Camera
-                            style={{ width: '100%', height: '100%' }}
-                            type={_s.cameraType}
-                            flashMode={_s.flashSetting.mode}
-                            ref={(ref) => camera = ref}
-                            onCameraReady={() => this.onCameraReady()}
-                            barCodeScannerSettings={{ barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr] }}
-                            onBarCodeScanned={({ data }) => this.handleBarcodeScanned(data)}>
-                            <View
-                                style={frontFlashStyle}>
-                            </View>
-                        </Camera>
-                    </ViewShot>
-                </SafeAreaView>
-                <SafeAreaView style={styles.cameraUI}>
-                    <View style={{ justifyContent: 'space-between', flexDirection: 'row', flex: 1, paddingVertical: 10 }}>
-                        <QRLink link={_s.barcodeLink} />
-                        <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
-                            <TouchableHighlight style={{ ...styles.switchButton, opacity: _s.isRecording ? 0 : 1 }} onPress={this.togglePreviewStyle}>
-                                <MaterialIcons name="preview" size={Dimensions.get('window').width * .06} color="black" style={styles.icon} />
-                            </TouchableHighlight>
-                        </View>
-                        <View style={{ flex: 1, flexDirection: 'row', alignContent: 'center', justifyContent: 'space-between' }}>
+            <GestureRecognizer config={{ velocityThreshold: 0.05 }}
+                onSwipeRight={() => this.toggleRatio(1)}
+                onSwipeLeft={() => this.toggleRatio(-1)}
+                style={{ width: '100%', height: '100%' }}>
+                <SafeAreaView style={{ ...styles.container, backgroundColor: frontFlashOn ? 'white' : 'black' }}>
+                    <SafeAreaView style={{ ...styles.container, ...containerStyle }}>
+                        <ViewShot ref={(ref) => cameraViewShot = ref}
+                            options={{ format: "jpg", quality: 1 }}
+                            style={viewShotStyle}>
 
-                        </View>
-                        <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
-                            <TouchableHighlight style={styles.flashContainer} onPress={this.handleFlashToggle}>
-                                {_s.flashSetting.icon}
-                            </TouchableHighlight>
-                            {_s.flashSetting.mode === FlashMode.on || _s.flashSetting.mode === FlashMode.torch ? (
-                                <TouchableHighlight
-                                    style={{ ...styles.torchButton, backgroundColor: _s.flashSetting.mode === FlashMode.torch ? '#ffd469' : '#d0d0d0' }}
-                                    onPress={this.handleTorchToggle}
-                                    hitSlop={{ bottom: 8, top: 8, left: 8, right: 8 }}><Text></Text>
-                                </TouchableHighlight>
-                            ) : (
-                                <View />
-                            )}
-                        </View>
-                    </View>
-                    <View style={{ width: '100%' }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 15 }}>
-                            {_s.isRecording ? (
-                                <TouchableHighlight onPress={this.stopRecording} style={{ ...styles.photoButton, ...styles.record, backgroundColor: '#d0d0d0', }}>
-                                    <Entypo name="controller-stop" size={Dimensions.get('window').width * .1} color="red" />
-                                </TouchableHighlight>
-                            ) : (
-                                <TouchableHighlight onPress={this.handleRecordVideo} style={{ ...styles.photoButton, ...styles.record, backgroundColor: 'red', }}>
-                                    <View style={styles.recordIcon}></View>
-                                </TouchableHighlight>
-                            )}
-                        </View>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <View style={{ width: '30%', alignItems: 'center' }}>
-                                <TouchableHighlight style={{ width: Dimensions.get('window').width * .15, height: Dimensions.get('window').width * .15 }}
-                                    onPress={this.openPhotos}>
-                                    {_s.recentImageThumbnail ? <Image source={{ uri: _s.recentImageThumbnail }} style={styles.mediaPreview} /> : <View style={styles.mediaPreview}></View>}
+                            <Camera
+                                style={{ width: '100%', height: '100%' }}
+                                type={_s.cameraType}
+                                flashMode={_s.flashSetting.mode}
+                                ref={(ref) => camera = ref}
+                                onCameraReady={() => this.onCameraReady()}
+                                barCodeScannerSettings={{ barCodeTypes: [BarCodeScanner.Constants.BarCodeType.qr] }}
+                                onBarCodeScanned={({ data }) => this.handleBarcodeScanned(data)}
+                                {...ratioProp}>
+
+                                <View
+                                    style={frontFlashStyle}>
+                                    <Text
+                                        style={{ ...styles.viewMessage, backgroundColor: _s.viewMessage ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0)' }}>
+                                        {_s.viewMessage}
+                                    </Text>
+                                </View>
+                            </Camera>
+                        </ViewShot>
+                    </SafeAreaView>
+                    <SafeAreaView style={styles.cameraUI}>
+                        <View style={{ justifyContent: 'space-between', flexDirection: 'row', flex: 1, paddingVertical: 10 }}>
+                            <QRLink link={_s.barcodeLink} />
+                            <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
+                                <TouchableHighlight style={{ ...styles.switchButton, opacity: _s.isRecording ? 0 : 1 }} onPress={this.togglePreviewStyle}>
+                                    <MaterialIcons name="preview" size={Dimensions.get('window').width * .06} color="black" style={styles.icon} />
                                 </TouchableHighlight>
                             </View>
-                            <View style={{ width: '30%', alignItems: 'center' }}>
-                                <TouchableHighlight onPress={this.handleTakePhoto} style={styles.photoButton}>
-                                    <Entypo name="camera" size={Dimensions.get('window').width * .13} color="black" style={styles.icon} />
-                                </TouchableHighlight>
+                            <View style={{ flex: 1, flexDirection: 'row', alignContent: 'center', justifyContent: 'space-between' }}>
+
                             </View>
-                            <View style={{ width: '30%', alignItems: 'center' }}>
-                                <TouchableHighlight onPress={this.handleFlip} style={{ ...styles.photoButton, backgroundColor: 'black', borderColor: '#303030' }}>
-                                    <MaterialIcons name="flip-camera-android" size={Dimensions.get('window').width * .1} color="white" style={styles.icon} />
+                            <View style={{ height: '100%', justifyContent: 'flex-start', alignItems: 'center' }}>
+                                <TouchableHighlight style={styles.flashContainer} onPress={this.handleFlashToggle}>
+                                    {_s.flashSetting.icon}
                                 </TouchableHighlight>
+                                {_s.flashSetting.mode === FlashMode.on || _s.flashSetting.mode === FlashMode.torch ? (
+                                    <TouchableHighlight
+                                        style={{ ...styles.torchButton, backgroundColor: _s.flashSetting.mode === FlashMode.torch ? '#ffd469' : '#d0d0d0' }}
+                                        onPress={this.handleTorchToggle}
+                                        hitSlop={{ bottom: 8, top: 8, left: 8, right: 8 }}><Text></Text>
+                                    </TouchableHighlight>
+                                ) : (
+                                    <View />
+                                )}
                             </View>
                         </View>
-                    </View>
+                        <View style={{ width: '100%' }}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 15 }}>
+                                {_s.isRecording ? (
+                                    <TouchableHighlight onPress={this.stopRecording} style={{ ...styles.photoButton, ...styles.record, backgroundColor: '#d0d0d0', }}>
+                                        <Entypo name="controller-stop" size={Dimensions.get('window').width * .1} color="red" />
+                                    </TouchableHighlight>
+                                ) : (
+                                    <TouchableHighlight onPress={this.handleRecordVideo} style={{ ...styles.photoButton, ...styles.record, backgroundColor: 'red', }}>
+                                        <View style={styles.recordIcon}></View>
+                                    </TouchableHighlight>
+                                )}
+                            </View>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <View style={{ width: '30%', alignItems: 'center' }}>
+                                    <TouchableHighlight style={{ width: Dimensions.get('window').width * .15, height: Dimensions.get('window').width * .15 }}
+                                        onPress={this.openPhotos}>
+                                        {_s.recentImageThumbnail ? <Image source={{ uri: _s.recentImageThumbnail }} style={styles.mediaPreview} /> : <View style={styles.mediaPreview}></View>}
+                                    </TouchableHighlight>
+                                </View>
+                                <View style={{ width: '30%', alignItems: 'center' }}>
+                                    <TouchableHighlight onPress={this.handleTakePhoto} style={styles.photoButton}>
+                                        <Entypo name="camera" size={Dimensions.get('window').width * .13} color="black" style={styles.icon} />
+                                    </TouchableHighlight>
+                                </View>
+                                <View style={{ width: '30%', alignItems: 'center' }}>
+                                    <TouchableHighlight onPress={this.handleFlip} style={{ ...styles.photoButton, backgroundColor: 'black', borderColor: '#303030' }}>
+                                        <MaterialIcons name="flip-camera-android" size={Dimensions.get('window').width * .1} color="white" style={styles.icon} />
+                                    </TouchableHighlight>
+                                </View>
+                            </View>
+                        </View>
+                    </SafeAreaView>
                 </SafeAreaView>
-            </SafeAreaView>
+            </GestureRecognizer>
         );
     }
 }
@@ -422,21 +479,11 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#000',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
+        alignItems: 'center'
     },
     camera: {
         position: 'absolute',
         alignItems: 'center'
-    },
-    cameraCover: {
-        width: Dimensions.get('window').height * .75,
-        height: Dimensions.get('window').height,
-    },
-    cameraContain: {
-        width: Dimensions.get('window').width,
-        height: Dimensions.get('window').width * 1.333,
-        marginTop: Dimensions.get('window').height * .12
     },
     cameraUI: {
         position: 'absolute',
@@ -509,5 +556,12 @@ const styles = StyleSheet.create({
         borderRadius: 100,
         borderWidth: 2,
         borderColor: 'white'
+    },
+    viewMessage: {
+        textAlign: 'center',
+        color: 'white',
+        fontSize: 35,
+        fontWeight: 'bold',
+        lineHeight: 40
     }
 });
